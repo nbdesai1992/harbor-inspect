@@ -57,7 +57,7 @@ Static signals that a task is hard to reproduce or easier to game. They are heur
 
 ### Why `build-context-collision` exists
 
-Docker's builder can reuse a file from an earlier build whose context folder has the same name when the file's path, size and timestamp all match. Harbor tasks all call their folders `environment/` and `tests/`, and a separate verifier builds `tests/` as its own image, so two tasks that each hold a `tests/expected.json` of the same size can be built with each other's file once their timestamps agree. Unpacking an archive makes that likely because it sets whole-second timestamps. I hit this with Docker 28.0.4 and buildx 0.22.0 on macOS: an oracle run wrote the right answer and was graded against another task's key. Giving per-task files distinct names (a content hash works) removes the problem.
+Docker's builder can reuse a file from an earlier build whose context folder has the same name when the file's path, size and timestamp all match. Harbor tasks all call their folders `environment/` and `tests/`, and a separate verifier builds `tests/` as its own image, so two tasks that each hold a `tests/expected.json` of the same size can be built with each other's file once their timestamps agree. Unpacking an archive makes that likely because it sets whole-second timestamps. I hit this with Docker 28.0.4 and buildx 0.22.0 on macOS: an oracle run wrote the right answer and was graded against another task's key. Giving per-task files distinct names (a content hash works) removes the problem. The case is written up in section 4.4 of [this report](https://nealdes.ai/assets/orbifex/orbifex-paper.pdf) and illustrated in [the article](https://nealdes.ai/articles/persona-to-environment#fault).
 
 ## What it does not do
 
