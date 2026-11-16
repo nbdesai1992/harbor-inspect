@@ -4,6 +4,8 @@ Read [Harbor](https://github.com/harbor-framework/harbor) tasks without running 
 
 Harbor's own CLI is the tool for running, linting and publishing tasks. This is a small read-only companion for the moment before that, when someone hands you a folder of tasks and you want to know what is in it. One file, standard library only, Python 3.11+.
 
+The format itself is walked through in [The Harbor task format, file by file](https://nealdes.ai/articles/harbor-format).
+
 ```bash
 python harbor_inspect.py anatomy path/to/task        # which file is for whom
 python harbor_inspect.py census  path/to/dataset     # what the set looks like in aggregate
