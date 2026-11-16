@@ -13,6 +13,7 @@ Standard library only, Python 3.11+. Not affiliated with the Harbor project.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -21,7 +22,7 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 SECRET_RE = re.compile(r"\$\{([A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)")
 INSTALL_RE = re.compile(r"\b(apt-get install|apk add|pip3? install|uv pip install|uvx|npm (i|install)|curl [^\n|]*\|\s*(ba)?sh)")
@@ -106,6 +107,14 @@ def read_task(path: Path) -> dict:
     legacy = env.get("allow_internet")
     network = env.get("network_mode") or ("no-network" if legacy is False else "public")
     env_files = [str(p.relative_to(env_dir)) for p in env_dir.rglob("*") if p.is_file()] if env_dir.is_dir() else []
+    # Folders that Docker builds as a context: environment/ with a Dockerfile and no prebuilt image,
+    # and tests/ with its own Dockerfile. The Dockerfile and compose files are read directly, so
+    # only the files a build can COPY are recorded.
+    contexts = [d for d in (env_dir, tests_dir) if (d / "Dockerfile").is_file()
+                and ((d is env_dir and not env.get("docker_image")) or (d is tests_dir and verifier_image == "tests/Dockerfile"))]
+    context_files = [(d.name, str(p.relative_to(d)), p.stat().st_size, str(p))
+                     for d in contexts for p in d.rglob("*") if p.is_file() and not p.is_symlink()
+                     and p.name not in ("Dockerfile", ".dockerignore", "docker-compose.yaml", "docker-compose.yml")]
 
     return {
         "path": str(path), "name": (cfg.get("task") or {}).get("name") or path.name,
@@ -135,7 +144,34 @@ def read_task(path: Path) -> dict:
         "metadata_keys": sorted((cfg.get("metadata") or {}).keys()),
         "difficulty": (cfg.get("metadata") or {}).get("difficulty"),
         "bytes": {"environment": _size(env_dir), "tests": _size(tests_dir), "solution": _size(sol_dir)},
+        "context_files": context_files, "context_collisions": [],
     }
+
+
+def mark_context_collisions(tasks: list[dict]) -> None:
+    """Find files that share a build-context path and size across tasks while differing in content.
+
+    Docker's builder reuses a file from an earlier build whose context folder has the same name
+    when the file's path, size and timestamp all match. Every Harbor task calls its folders
+    environment/ and tests/, so two tasks with such a pair can be built with each other's file
+    once their timestamps agree, which unpacking an archive makes likely.
+    """
+    groups: dict[tuple, list[tuple[dict, str]]] = {}
+    for t in tasks:
+        for context, rel, size, full in t["context_files"]:
+            groups.setdefault((context, rel, size), []).append((t, full))
+    for (context, rel, _), members in groups.items():
+        if len(members) < 2:
+            continue
+        digests = {}
+        for t, full in members:
+            digests.setdefault(hashlib.sha256(Path(full).read_bytes()).hexdigest(), []).append(t)
+        if len(digests) > 1:
+            for owners in digests.values():
+                for t in owners:
+                    t["context_collisions"].append(f"{context}/{rel}")
+    for t in tasks:
+        t.pop("context_files", None)
 
 
 # ---------------------------------------------------------------- flags
@@ -153,6 +189,8 @@ FLAGS = {
     "root-agent": "The agent runs as root (no [agent].user), which widens what it can alter in a shared sandbox.",
     "answer-like-file-in-environment": "A file in environment/ has a name that suggests an answer key. Everything there is visible to the agent.",
     "no-canary": "No canary string in the instruction, config, tests or solution, so leaked copies are hard to detect in training data.",
+    "build-context-collision": "A file that a Docker build copies in has the same path and size as a different file in another scanned task. "
+                               "Docker can build one task with the other's copy when timestamps also match, as they do after unpacking an archive.",
 }
 
 
@@ -182,6 +220,8 @@ def flags_for(t: dict) -> list[str]:
         out.append("answer-like-file-in-environment")
     if not t["canary"]:
         out.append("no-canary")
+    if t["context_collisions"]:
+        out.append("build-context-collision")
     return out
 
 
@@ -255,7 +295,9 @@ def summarize(tasks: list[dict]) -> dict:
 
 
 def load(paths: list[str]) -> list[dict]:
-    return [read_task(p) for path in paths for p in find_tasks(Path(path))]
+    tasks = [read_task(p) for path in paths for p in find_tasks(Path(path))]
+    mark_context_collisions(tasks)
+    return tasks
 
 
 def cmd_census(args) -> int:

@@ -61,5 +61,32 @@ class ReadTests(unittest.TestCase):
             self.assertEqual(s["median_agent_timeout_sec"], 120)
 
 
+class CollisionTests(unittest.TestCase):
+    SEPARATE = 'schema_version = "1.4"\n[agent]\ntimeout_sec = 60\nuser = "agent"\n[verifier]\nenvironment_mode = "separate"\n'
+
+    def _dataset(self, root: Path, names: tuple[str, str]) -> list[dict]:
+        for task, key_name, key in (("a", names[0], '{"k": "AAAA"}'), ("b", names[1], '{"k": "BBBB"}')):
+            d = make_task(root / task, self.SEPARATE, tests_dockerfile=True)
+            (d / "tests" / key_name).write_text(key)
+        return hi.load([str(root)])
+
+    def test_same_path_and_size_with_different_content_is_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = self._dataset(Path(tmp), ("gold.json", "gold.json"))
+            for t in tasks:
+                self.assertIn("build-context-collision", hi.flags_for(t))
+                self.assertEqual(t["context_collisions"], ["tests/gold.json"])
+
+    def test_distinct_names_are_not_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for t in self._dataset(Path(tmp), ("gold.aaaa.json", "gold.bbbb.json")):
+                self.assertNotIn("build-context-collision", hi.flags_for(t))
+
+    def test_identical_dockerfiles_and_scripts_are_not_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for t in self._dataset(Path(tmp), ("gold.aaaa.json", "gold.bbbb.json")):
+                self.assertEqual(t["context_collisions"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
